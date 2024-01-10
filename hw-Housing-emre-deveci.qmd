@@ -1,0 +1,583 @@
+---
+title: "hw-Housing-emredeveci"
+author: "Emre Deveci"
+format: html
+editor: visual
+html:
+standalone: true
+embed-resources: true
+code-fold: true
+number-sections: true
+toc : true
+---
+
+# Housing
+
+The model and prediction of the rent of flats and houses.
+
+## Loading Packages and the Data
+
+```{r}
+#| message: false
+suppressWarnings({
+library(tidyverse)
+library(purrr)
+library(patchwork)
+library(dplyr)
+library(tidymodels)
+library(ggplot2)
+library(leaflet)
+library(corrplot)
+library(correlation)
+library(modelsummary)
+library(knitr)
+library(lubridate)
+library(stats)
+library(randomForest)
+library(tidyr)})
+```
+
+```{r data}
+delhi <- read.csv("data/Delhi_v2.csv")
+```
+
+## Pre-processing
+
+### Units
+
+I want to create a new variable of the price of euro/(square meter) since the original price_sqft variable has the Indian rupees/square feet. In order to do this, I have to multiply with 0.011 since 1 Indian rupee = 0.011 euro, and 1 square foot = 0.092903 square meters. Moreover, I also created the Price_eur column and the area_m2.
+
+```{r}
+delhi <- delhi |>
+  mutate(Price_sqm = (Price_sqft)*0.011/0.092903,
+         Price_eur = price*0.011,
+         area_m2 = area*0.092903)
+```
+
+### NAs
+
+I want to replace the N/As in the dataframe with the value of "0".
+
+```{r}
+#checking which columns have N/As
+columns <- colSums(is.na(delhi))
+
+#naming the columns which have N/As
+na_columns <- names(columns[columns > 0])
+
+# replacing missing values with 0
+delhi <- delhi |>
+  mutate(across(all_of(na_columns), ~if_else(is.na(.), 0, .)))
+
+# confirming that the N/As have been replaced
+columns_after <- delhi |>
+  summarise_all(~sum(is.na(.)))
+```
+
+Replacing the N/As with 0 may be dangerous for some columns since it can change the mean and other measures drastically. In our case the columns that have N/As are "Balcony","parking" and "Lift". We dont need to measure the mean of these columns so in this aspect we are fine. However, parking has 5126 N/As, balcony 2572, and Lift 6005 N/As. This can cause a problem since we wont have lots of information on these variables and we cant rely on them too much for our analysis.
+
+### Log-transformation
+
+Here I am creating new columns of "log" for the "Price_eur", "area_m2", "Price_sqm", "Bedrooms", "Bathrooms", "Balcony", "parking", "Lift" variables.
+
+```{r}
+count_variables <- c("Price_eur", "area_m2","Price_sqm", "Bedrooms", "Bathrooms", "Balcony", "parking", "Lift")
+
+#creating new log-transformed columns for each variable
+delhi <- delhi |>
+  mutate(across(all_of(count_variables), list(log_transformed = ~log1p(.)), .names = "{col}_log"))
+```
+
+### Split the data
+
+Here I am splitting the data into training and test data.
+```{r}
+#setting a seed
+set.seed(320)
+
+data_split <- delhi|>
+  initial_split(prop = 0.7) 
+
+#creating the data frames for the two sets:
+train_delhi <- training(data_split)
+test_delhi  <- testing(data_split)
+```
+I choose the 0.7 the share of the training data since its more common to use the 70% for training and 30% for testing. I will also have enough data for the training and leave enough data for the testing which I will use later.
+
+## Exploratory analysis
+
+### i. Mapping space and price per m2
+
+In this exercise, I want to visualize the mapping of the housing in Delhi by the size of apartments(flats) and houses, and the price (original and log).
+
+***Map of Price per Square Meter***
+Using Price_sqm
+```{r}
+ggplot(data = train_delhi, aes(x = longitude, y = latitude, color = Price_sqm)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "Map of Price per Square Meter (Original)",
+       subtitle = "Color represents the original Price per square meter",
+       caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia")
+```
+Using Price_sqm_log
+```{r}
+ggplot(data = train_delhi, aes(x = longitude, y = latitude, color = Price_sqm_log)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "Map of Log-transformed Price per Square Meter-Log",
+       subtitle = "Color represents the log-transformed Price per square meter(log)",
+       caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia")
+```
+From these two scatterplots, the better version is the second one (which uses the log variables) since we can see the difference between prices better here.
+The reason why this happens is that we have outliers in our data(Price_sqm) therefore the color range doesnt show the changes in price that well.
+
+Moreover, we can see that the prices of housing in Delhi are higher in the west part of the city. We can see a lighter green and even yellow points on the center-west part of the city.
+
+
+***Map of the size of the apartments and houses***
+Using area_m2:
+```{r}
+ggplot(data = train_delhi, aes(x = longitude, y = latitude, color = area_m2)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "Map of the size of the apartments and houses (Original)",
+       subtitle = "Color represents the original size of the apartments and houses",
+       caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia")
+```
+Using size_m2_log:
+```{r}
+  ggplot(data = train_delhi, aes(x = longitude, y = latitude, color = area_m2_log)) +
+  geom_point() +
+  scale_color_viridis_c() +
+  labs(title = "Map of the Log-transformed Size of the apartments and houses",
+       subtitle = "Color represents the log-transformed Size of the apartments and houses",
+       caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia")
+```
+The same goes for these two scatterplots, so the better version is the second one (which uses the log variables) since we can see the difference between the sizes of houses better here.
+
+Moreover, we can see that the area of housing in Delhi are higher in the west part of the city. We can see a lighter green and even yellow points on the center-west part of the city.
+
+From this mapping example we can conclude that price and area are similar and visually correlated with each other (the higher prices are also located in the same part of the city as are the bigger houses/flats).
+
+
+### II. Categories and price
+
+In this exercise, I want to illustrate the box-plots of the difference in prices between:
+1. Houses and flats
+2. New properties and resales
+3. Furnished or not houses/flats
+4. Ready or under construction houses/flats
+
+For each visualization, I used the Price_eur_log since it shows the difference in the box-plots better. 
+
+1.  Houses vs. Flats:
+```{r}
+ggplot(train_delhi, aes(x = type_of_building, y = Price_eur_log, fill=type_of_building)) +
+  geom_boxplot() +
+  labs(title = "Price Comparison between Houses and Flats",
+       x = "",
+       y = "Price-log",
+       fill="Property Type",
+       caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia")+
+  scale_fill_brewer(palette = "Set1")+
+  theme_minimal()+
+  theme(axis.text.x = element_blank())
+```
+
+
+
+2.  New Properties vs. Resales:
+```{r}
+ggplot(train_delhi, aes(x = neworold, y = Price_eur_log, fill=neworold)) +
+  geom_boxplot() +
+  labs(title = "Price Comparison between New Properties and Resales",
+       x = "",
+       y = "Price-log",
+       fill="New or old",
+       caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia")+
+  scale_fill_brewer(palette = "Set1")+
+  theme_minimal()+
+  theme(axis.text.x = element_blank())
+```
+
+
+
+3.  Furnished vs. Not Furnished:
+```{r}
+train_delhi|>
+  filter(Furnished_status == "Furnished" | Furnished_status == "Semi-Furnished" | Furnished_status == "Unfurnished")|>
+ggplot(aes(x = Furnished_status, y = Price_eur_log, fill=Furnished_status)) +
+  geom_boxplot() +
+  labs(title = "Price Comparison between Furnished and Not Furnished Properties",
+       x = "",
+       y = "Price-log",
+       fill="Furnished Status",
+       caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia")+
+  scale_fill_brewer(palette = "Set1")+
+  theme_minimal()+
+  theme(axis.text.x = element_blank())
+```
+
+
+
+4.  Ready vs. Under Construction:
+```{r}
+train_delhi|>
+  filter(Status == "Under Construction" | Status == "Ready to Move")|>
+ggplot(aes(x = Status, y = Price_eur_log, fill=Status)) +
+  geom_boxplot() +
+  labs(title = "Price Comparison between Ready and Under Construction Properties",
+       x = "",
+       y = "Price-log",
+       fill="Construction Status",
+       caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia")+
+  scale_fill_brewer(palette = "Set1")+
+  theme_minimal()+
+  theme(axis.text.x = element_blank())
+```
+In order to save money, the better strategy would be if we got a flat which is **not** a new property but a resale. Furthermore, it has to be underfurnished and **not** Under Construction.
+
+
+
+### iii. Size and price
+
+In this exercise, I want to illustrate the connection between the size of an apartment(original and log) and the total price(original and log), coloring the points by the Price per square meter and adding the regression lines for houses/flats with and without:
+1. PARKING AVAILABILITY     2. BALCONY AVAILABILITY
+
+**1. PARKING AVAILABILITY**
+I'm creating a new column of parking, called parking_status which shows if there is any parking available for the housing("Yes") or not("No"). 
+```{r}
+train_delhi <- train_delhi|>
+  mutate(parking_status = if_else(parking > 0, "Yes", "No"))
+```
+**With original(normal) data:**
+```{r}
+ggplot(train_delhi, aes(x = area_m2, y = Price_eur, color = Price_sqm)) +
+  geom_point() +
+  geom_smooth(data = subset(train_delhi, parking_status == "Yes"), aes(linetype = "Parking: Yes"), method = "lm", formula = y ~ x, se = FALSE, color = "red", linewidth = 1.5) +
+  geom_smooth(data = subset(train_delhi, parking_status == "No"), aes(linetype = "Parking: No"), method = "lm", formula = y ~ x, se = FALSE, color = "red", linewidth = 1.5) +
+  scale_color_viridis_c(name = "Price per Square Meter", labels = scales::dollar_format(prefix = "€")) +
+  labs(
+    title = "Scatter Plot of Apartment Size vs. Total Price",
+    x = "Apartment Size (m²)",
+    y = "Total Price (Euro)",
+    subtitle = "Points colored by Price per Square Meter",
+    caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia")+
+  theme_minimal()
+```
+**With log data:**
+```{r}
+ggplot(train_delhi, aes(x = area_m2_log, y = Price_eur_log, color = Price_sqm_log)) +
+  geom_point() +
+  geom_smooth(data = subset(train_delhi, parking_status == "Yes"), aes(linetype = "Parking: Yes"), method = "lm", formula = y ~ x, se = FALSE, color = "red", linewidth = 1.5) +
+  geom_smooth(data = subset(train_delhi, parking_status == "No"), aes(linetype = "Parking: No"), method = "lm", formula = y ~ x, se = FALSE, color = "red", linewidth = 1.5) +
+  scale_color_viridis_c(name = "Price-log per Square Meter", labels = scales::dollar_format(prefix = "€")) +
+  labs(
+    title = "Scatter Plot of Apartment Size vs. Total Price(Log)",
+    x = "Apartment Size (m²)",
+    y = "Total Price-Log (Euro)",
+    subtitle = "Points colored by Price per Square Meter (Log)",
+    caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia"
+  ) +
+  theme_minimal()
+```
+We can see that the second scatter-plot is more informative than the first one. The second one is much more widespread and you can see more of the correlation between the two variables (Apartment size and Price). In the first scatter-plot we can see the outliers and also the distribution of the points is more compressed in the bottom-left of the graph. Furthermore, the regression lines are more compatible in the second graph than the first one, which means we can rely more on the second graph for visualization.
+
+
+**2. BALCONY AVAILABILITY**
+I'm creating a new column of balcony, called balcony_status which shows if there is any balcony available of the housing("Yes") or not("No").
+```{r}
+train_delhi <- train_delhi|>
+  mutate(balcony_status = if_else(Balcony > 0, "Yes", "No"))
+```
+**With original(normal) data:**
+```{r}
+ggplot(train_delhi, aes(x = area_m2, y = Price_eur, color = Price_sqm)) +
+  geom_point() +
+  geom_smooth(data = subset(train_delhi, balcony_status == "Yes"), aes(linetype = "Balcony: Yes"), method = "lm", formula = y ~ x, se = FALSE, color = "red", linewidth = 1.5) +
+  geom_smooth(data = subset(train_delhi, balcony_status == "No"), aes(linetype = "Balcony: No"), method = "lm", formula = y ~ x, se = FALSE, color = "red", linewidth = 1.5) +
+  scale_color_viridis_c(name = "Price per Square Meter", labels = scales::dollar_format(prefix = "€")) +
+  labs(
+    title = "Scatter Plot of Apartment Size vs. Total Price",
+    x = "Apartment Size (m²)",
+    y = "Total Price (Euro)",
+    subtitle = "Points colored by Price per Square Meter",
+    caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia"
+  ) +
+  theme_minimal()
+```
+**With log data:**
+```{r}
+ggplot(train_delhi, aes(x = area_m2_log, y = Price_eur_log, color = Price_sqm_log)) +
+  geom_point() +
+  geom_smooth(data = subset(train_delhi, balcony_status == "Yes"), aes(linetype = "Balcony: Yes"), method = "lm", formula = y ~ x, se = FALSE, color = "red", linewidth = 1.5) +
+  geom_smooth(data = subset(train_delhi, balcony_status == "No"), aes(linetype = "Balcony: No"), method = "lm", formula = y ~ x, se = FALSE, color = "red", linewidth = 1.5) +
+  scale_color_viridis_c(name = "Price per Square Meter", labels = scales::dollar_format(prefix = "€")) +
+  labs(
+    title = "Scatter Plot of Apartment Size vs. Total Price(Log)",
+    x = "Apartment Size (m²)",
+    y = "Total Price (Euro)",
+    subtitle = "Points colored by Price per Square Meter(Log)",
+    caption = "Source: https://www.kaggle.com/datasets/goelyash/housing-price-dataset-of-delhiindia"
+  ) +
+  theme_minimal()
+```
+As in the Parking Availability illustration, we can see that the second scatter-plot is more informative than the first one. The second one is much more widespread and we can see more of the correlation between the two variables (Apartment size and Price). In the first scatter-plot we can see the outliers and also the distribution of the points is more compressed in the bottom-left of the graph. Furthermore, the regression lines are more compatible in the second graph than the first one, which means we can rely more on the second graph for visualization.
+
+
+# Preliminaries
+Im going to continue by setting the seed if 0421 before splitting the data set into training data and test data. Moreover, Im going to use 60% share for the training data.
+
+```{r}
+#setting a seed
+set.seed(0421)
+
+data_split <- delhi|>
+  select_if(is.numeric)|>
+  initial_split(prop = 0.6) 
+
+#creating the data frames for the two sets:
+train_delhi <- training(data_split)
+test_delhi  <- testing(data_split)
+```
+
+
+# Hypothesis testing
+
+## 1. Picking two variables which influence the Price_eur variable
+***Correlation and R-squared***
+```{r}
+correlation_matrix_eur <- cor(train_delhi)
+correlation_with_price_eur <- correlation_matrix_eur[,"Price_eur"]
+print(sort(correlation_with_price_eur, decreasing = TRUE))
+
+```
+This tells us that the variables who influence the most Price_eur are area_m2 with 0.85, and Bathrooms with 0.71. However, we also need to see the R-squared values of these variables.
+
+```{r}
+#listing the numeric column names
+columns_of_interest <- c("area_m2", "Bathrooms", "Bedrooms", "Balcony", "parking", "Lift", "latitude", "longitude")
+
+# getting the R squared of each the columns in relation to Price_eur with the help of Linear Regression
+for (column in columns_of_interest) {
+  lm_model <- lm(Price_eur ~ ., data = train_delhi[, c("Price_eur", column)])
+
+  r_squared <- summary(lm_model)$r.squared
+  
+  print(paste("R-squared for", column, ":", round(r_squared, 4)))}
+```
+Therefore with the help of Linear regression of the Price_eur for each of the numeric variables and we get the R-squared value, we get the highest results for the *"area_m2"* and *"Bathrooms"* variables. This makes sense, since the bigger the house/flat, the more expensive it will be and the more bathrooms the house/flat has, (the more square meters) & the more luxurious it is considered. Therefore, Im going to decide to keep these two variables for the analysis.
+
+## 2. Formulating the hypotheses for the two variables
+***For "area_m2":***
+Null Hypothesis (H0): The size of the apartment or house (area_m2) doesn't influence housing prices. Alternative Hypothesis (H1): The size of the apartment or house (area_m2) influences housing prices.
+*Interpretation: If the p-value associated with the regression coefficient for "area_m2" is greater than the significance level (0.05), we fail to reject the null hypothesis, suggesting that the size of the apartment or house does not have a significant impact on housing prices. If the p-value is less than the significance level, we reject the null hypothesis, indicating that there is evidence to suggest that the size of the apartment or house influences housing prices.*
+
+***For "Bathrooms":***
+Null Hypothesis (H0): The number of bathrooms (Bathrooms) doesn't influence housing prices. Alternative Hypothesis (H1): The number of bathrooms (Bathrooms) influences housing prices. *Interpretation: Similar to the "area_m2" hypothesis, we would analyze the p-value with the help of regression model for "Bathrooms" to determine whether we reject or fail to reject the null hypothesis. If the p-value is <0.05, we would conclude that the number of bathrooms has a significant impact on housing prices.*
+
+## 3. Testing the hypotheses in an OLS model
+***For "area_m2"***
+```{r}
+# fitting the linear regression model for area_m2
+model_area_m2 <- lm(Price_eur ~ area_m2, data = train_delhi)
+summary(model_area_m2)
+glance(model_area_m2)
+```
+For this model, we can see that the R squared is 0.72 which is a decent value. As for the coefficients, we get the linear regression formula Price_eur = -41648.5 + 1014.4*area_m2 which means that the area_m2 has to be at least 42 for the Price_eur to be positive. The standard error is 9.2 for area_m2 and the p-value is pretty small (<0.05) which means that we reject the null hypothesis H0 and we conclude that there is evidence to suggest that the size of the apartment or house influences housing prices.
+
+***For "Bathrooms"***
+```{r}
+# fitting the linear regression model for Bathrooms
+model_bathrooms <- lm(Price_eur ~ Bathrooms, data = train_delhi)
+summary(model_bathrooms)
+glance(model_bathrooms)
+```
+For this model, we can see that the R squared is 0.5045 which is a lower value than the model with the area_m2 (the first model is better).
+As for the coefficients, we get the linear regression formula Price_eur = -72058.4 + 65493.1*Bathrooms which means that the Bathrooms has to be at least 2 for the Price_eur to be positive. The standard error is 952.8 for area_m2 and the p-value is pretty small (<0.05) which means that we reject the null hypothesis H0 and we conclude that the number of bathrooms has a significant impact on housing prices.
+
+
+## 4. Adding Control Variables to the OLS models
+I decided to add the *latitude*, *longitude* and *Bedrooms* as control variables to the models, since these variables had the next highest R-squared.
+
+***For "area_m2"***
+```{r}
+# fitting the linear regression model for area_m2 with control variables
+model_area_m2_with_controls <- lm(Price_eur ~ area_m2 + latitude + longitude + Bedrooms, data = train_delhi)
+
+summary(model_area_m2_with_controls)
+glance(model_area_m2_with_controls)
+```
+For this model, we can see that the R squared is 0.7635 which is a higher value than the model with only the area_m2 (this model is better).
+As for the coefficients, we get the linear regression formula:
+Price_eur = 5233073.56 + 983.09 * area_m2 + 68809.51 * latitude - 93679.75 * longitude + 1396.23 * Bedrooms
+The p-value is pretty small (<0.05) for most of the variables except the Bedrooms variable, which means that Bedrooms doesnt tell us that much and we can get rid of it.
+
+***For "Bathrooms"***
+```{r}
+# fitting the linear regression model for Bathrooms with control variables
+model_bathrooms_with_controls <- lm(Price_eur ~ Bathrooms + latitude + longitude + Bedrooms, data = train_delhi)
+
+summary(model_bathrooms_with_controls)
+glance(model_bathrooms_with_controls)
+```
+For this model, we can see that the R squared is 0.558 which is a higher value than the model with only the Bathrooms (this model is better).
+As for the coefficients, we get the linear regression formula:
+Price_eur = 6483451 + 48786 * Bathrooms + 8527 * latitude - 88052 * longitude + 17291 * Bedrooms
+The p-value is pretty small (<0.05) for most of the variables except the latitude variable, which means that latitude doesnt tell us that much and we can get rid of it.
+
+***For both***
+```{r}
+# fitting the linear regression model for area_m2 and Bathrooms with control variables
+model_with_controls <- lm(Price_eur ~ area_m2 + Bathrooms + latitude + longitude + Bedrooms, data = train_delhi)
+
+summary(model_with_controls)
+glance(model_with_controls)
+```
+For this model, we can see that the R squared is 0.766 which is just a little higher value than the model with (Price_eur ~ area_m2 + latitude + longitude + Bedrooms) therefore this model is better.
+As for the coefficients, we get the linear regression formula:
+Price_eur = 5048727.22 + 928.60 * area_m2 + 8673.88 * Bathrooms + 71554.97 * latitude - -92375.06 * longitude + -2067.36 * Bedrooms
+The p-value is pretty small (<0.05) for all of the variables which means that this model is the best model till now and we can rely on this model the best.
+
+
+# Prediction
+Im going to use the linear regression as a defining model. Im not going to do any more steps of pre-processing since the most of it I did at the beginning of this analysis and the other steps are going to be defined in the recipes of each model.
+
+### 1. Defining Model
+```{r}
+model_OLS <- linear_reg() |>
+  set_mode("regression") |>
+  set_engine("lm")
+```
+
+Names of train_delhi columns:
+```{r}
+names(train_delhi)
+```
+
+### 2. Recipes
+
+**Simple model with direct inputs:**
+```{r}
+delhi_model <- recipe(Price_eur ~ area_m2 + Bathrooms + latitude + longitude + Bedrooms, data = train_delhi)
+summary(delhi_model)
+```
+For the Simple Model, Im taking "area_m2", "Bathrooms", "latitude", "longitude", and "Bedrooms" as predictors. 
+
+**Log transformation model:**
+```{r}
+delhi_ln_model <- recipe(Price_eur_log ~ .,
+                      data = train_delhi)|>
+  step_log(area_m2, offset =  1, base = 10)|>
+  step_log(Bathrooms, offset =  1, base = 10)|>
+  step_log(latitude, offset =  1, base = 10)|>
+  step_log(longitude, offset =  1, base = 10)|>
+  step_log(Bedrooms, offset =  1, base = 10)|>
+  step_rm("X", "price", "area", "Balcony", "parking", 
+          "Lift", "Price_sqft", "Price_sqm",  "Price_eur", "area_m2_log", 
+          "Price_sqm_log", "Bedrooms_log", "Bathrooms_log", "Balcony_log", 
+          "parking_log", "Lift_log")
+summary(delhi_ln_model) 
+
+delhi_ln_model_prep <- prep(delhi_ln_model, training = train_delhi)
+```
+Also for this model, Im making "area_m2", "Bathrooms", "latitude", "longitude", and "Bedrooms" as predictors.
+
+**Principal Component Analysis model:**
+```{r}
+delhi_pca_model <- recipe(Price_eur ~ ., data = train_delhi) |>
+  step_center(all_predictors())|>
+  step_scale(all_predictors())|>
+  step_rm("X", "price", "area", "Price_sqft",  "Price_sqm", "Price_eur_log", "area_m2_log", "Price_sqm_log", "Bedrooms_log", "Bathrooms_log", "Balcony_log", "parking_log", "Lift_log")
+summary(delhi_pca_model)
+
+delhi_pca_model_prep <- prep(delhi_pca_model, training = train_delhi)
+```
+For this model, Im scaling and centering all the predictors and then removing the variables I dont need for this model. Im only leaving the "area_m2", "Bathrooms", "latitude", "longitude", "Bedrooms", "Balcony", "parking", "Lift".
+
+### 3. Workflows
+```{r}
+#Simple model with direct inputs:
+delhi_model_wf <- workflow()|>
+  add_recipe(delhi_model)|>
+  add_model(model_OLS)
+```
+
+```{r}
+#Log transformation model:
+delhi_ln_model_wf <- workflow()|>
+  add_recipe(delhi_ln_model)|>
+  add_model(model_OLS)
+```
+
+```{r}
+#Principal Component Analysis model:
+delhi_pca_model_wf <- workflow()|>
+  add_recipe(delhi_pca_model)|> 
+  add_model(model_OLS) 
+```
+
+### 4. Fit model to training data
+```{r}
+delhi_model_fit <- fit(delhi_model_wf, data = train_delhi)
+
+delhi_ln_model_fit <- fit(delhi_ln_model_wf, data = train_delhi)
+
+delhi_pca_model_fit <- fit(delhi_pca_model_wf, data = train_delhi)
+```
+
+```{r}
+# goodness of fit measures
+glance(delhi_model_fit)
+glance(delhi_ln_model_fit)
+glance(delhi_pca_model_fit)
+```
+Here we can see that the model which has the highest R squared is the LN model, whereas the Simple Model and the PCA model have almost the same value of R squared, with 0.7661 and 0.7665 respectively. 
+
+**Training error RMSE**
+```{r}
+rmse(as.data.frame(cbind(train_delhi$Price_eur, delhi_model_fit$fit$fit$fit$fitted.values)),V1, V2)
+rmse(as.data.frame(cbind(train_delhi$Price_eur, exp(delhi_ln_model_fit$fit$fit$fit$fitted.values))),V1, V2)
+rmse(as.data.frame(cbind(train_delhi$Price_eur, delhi_pca_model_fit$fit$fit$fit$fitted.values)),V1, V2)
+```
+Whereas here we can see that the model with the lowest RMSE loss funcion is the PCA Model (for the training data) with 38568.44
+
+**Model Summary**
+```{r}
+modelsummary(models = list(delhi_model_fit, delhi_ln_model_fit, delhi_pca_model_fit),
+             estimate = "{estimate}{stars}",
+             stars = FALSE,
+             gof_map = c("rmse", "nobs", "r.squared", "BIC"),
+             output = "markdown")
+```
+Here, Im showing the whole Summary of the results of the fitting of each model.
+
+### 5. Make predictions for test data
+```{r}
+#| include: false
+predict(delhi_model_fit, new_data = test_delhi)
+predict(delhi_ln_model_fit, new_data = test_delhi)
+predict(delhi_pca_model_fit, new_data = test_delhi)
+```
+
+**Testing error RMSE**
+```{r}
+rmse(as.data.frame(cbind(test_delhi$Price_eur, unlist(predict(delhi_model_fit, test_delhi)))),V1, V2)
+rmse(as.data.frame(cbind(test_delhi$Price_eur, exp(unlist(predict(delhi_ln_model_fit, test_delhi))))),V1, V2)
+rmse(as.data.frame(cbind(test_delhi$Price_eur, unlist(predict(delhi_pca_model_fit, test_delhi)))),V1, V2)
+```
+Here we can see that the model with the lowest RMSE loss funcion is the PCA Model (for the testing data) with 38920.19.
+
+### 6. Summarize the results in a table
+```{r}
+Results <- tibble(models = c("Simple Model", "Ln Model", "PCA Model"),
+       RMSEtrain = c(sqrt(mean((delhi_model_fit$fit$fit$fit$fitted.values - train_delhi$Price_eur)^2)),
+                     sqrt(mean((exp(delhi_ln_model_fit$fit$fit$fit$fitted.values) - train_delhi$Price_eur)^2)),
+                    sqrt(mean((delhi_pca_model_fit$fit$fit$fit$fitted.values - train_delhi$Price_eur)^2))),
+       RMSEtest = c(sqrt(mean((unlist(predict(delhi_model_fit, test_delhi)) - test_delhi$Price_eur)^2)),
+                    sqrt(mean((exp(unlist(predict(delhi_ln_model_fit, test_delhi))) - test_delhi$Price_eur)^2)),
+                    sqrt(mean((unlist(predict(delhi_pca_model_fit, test_delhi)) - test_delhi$Price_eur)^2))))
+Results
+```
+From all these results we can conclude that the best model is the PCA Model (since both RMSEtrain and RMSEtest of PCA Model are the lowest). The next model who works the best is Simple one and then is the LN Model. 
