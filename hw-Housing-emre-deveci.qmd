@@ -48,7 +48,7 @@ delhi <- read.csv("data/Delhi_v2.csv")
 I want to create a new variable of the price of euro/(square meter) since the original price_sqft variable has the Indian rupees/square feet. In order to do this, I have to multiply with 0.011 since 1 Indian rupee = 0.011 euro, and 1 square foot = 0.092903 square meters. Moreover, I also created the Price_eur column and the area_m2.
 
 ```{r}
-delhi <- delhi |>
+delhi <- delhi %>%
   mutate(Price_sqm = (Price_sqft)*0.011/0.092903,
          Price_eur = price*0.011,
          area_m2 = area*0.092903)
@@ -66,11 +66,11 @@ columns <- colSums(is.na(delhi))
 na_columns <- names(columns[columns > 0])
 
 # replacing missing values with 0
-delhi <- delhi |>
+delhi <- delhi %>%
   mutate(across(all_of(na_columns), ~if_else(is.na(.), 0, .)))
 
 # confirming that the N/As have been replaced
-columns_after <- delhi |>
+columns_after <- delhi %>%
   summarise_all(~sum(is.na(.)))
 ```
 
@@ -84,7 +84,7 @@ Here I am creating new columns of "log" for the "Price_eur", "area_m2", "Price_s
 count_variables <- c("Price_eur", "area_m2","Price_sqm", "Bedrooms", "Bathrooms", "Balcony", "parking", "Lift")
 
 #creating new log-transformed columns for each variable
-delhi <- delhi |>
+delhi <- delhi %>%
   mutate(across(all_of(count_variables), list(log_transformed = ~log1p(.)), .names = "{col}_log"))
 ```
 
@@ -95,7 +95,7 @@ Here I am splitting the data into training and test data.
 #setting a seed
 set.seed(320)
 
-data_split <- delhi|>
+data_split <- delhi%>%
   initial_split(prop = 0.7) 
 
 #creating the data frames for the two sets:
@@ -205,8 +205,8 @@ ggplot(train_delhi, aes(x = neworold, y = Price_eur_log, fill=neworold)) +
 
 3.  Furnished vs. Not Furnished:
 ```{r}
-train_delhi|>
-  filter(Furnished_status == "Furnished" | Furnished_status == "Semi-Furnished" | Furnished_status == "Unfurnished")|>
+train_delhi%>%
+  filter(Furnished_status == "Furnished" | Furnished_status == "Semi-Furnished" | Furnished_status == "Unfurnished")%>%
 ggplot(aes(x = Furnished_status, y = Price_eur_log, fill=Furnished_status)) +
   geom_boxplot() +
   labs(title = "Price Comparison between Furnished and Not Furnished Properties",
@@ -223,8 +223,8 @@ ggplot(aes(x = Furnished_status, y = Price_eur_log, fill=Furnished_status)) +
 
 4.  Ready vs. Under Construction:
 ```{r}
-train_delhi|>
-  filter(Status == "Under Construction" | Status == "Ready to Move")|>
+train_delhi%>%
+  filter(Status == "Under Construction" | Status == "Ready to Move")%>%
 ggplot(aes(x = Status, y = Price_eur_log, fill=Status)) +
   geom_boxplot() +
   labs(title = "Price Comparison between Ready and Under Construction Properties",
@@ -248,7 +248,7 @@ In this exercise, I want to illustrate the connection between the size of an apa
 **1. PARKING AVAILABILITY**
 I'm creating a new column of parking, called parking_status which shows if there is any parking available for the housing("Yes") or not("No"). 
 ```{r}
-train_delhi <- train_delhi|>
+train_delhi <- train_delhi%>%
   mutate(parking_status = if_else(parking > 0, "Yes", "No"))
 ```
 **With original(normal) data:**
@@ -288,7 +288,7 @@ We can see that the second scatter-plot is more informative than the first one. 
 **2. BALCONY AVAILABILITY**
 I'm creating a new column of balcony, called balcony_status which shows if there is any balcony available of the housing("Yes") or not("No").
 ```{r}
-train_delhi <- train_delhi|>
+train_delhi <- train_delhi%>%
   mutate(balcony_status = if_else(Balcony > 0, "Yes", "No"))
 ```
 **With original(normal) data:**
@@ -333,8 +333,8 @@ Im going to continue by setting the seed if 0421 before splitting the data set i
 #setting a seed
 set.seed(0421)
 
-data_split <- delhi|>
-  select_if(is.numeric)|>
+data_split <- delhi%>%
+  select_if(is.numeric)%>%
   initial_split(prop = 0.6) 
 
 #creating the data frames for the two sets:
@@ -446,8 +446,8 @@ Im going to use the linear regression as a defining model. Im not going to do an
 
 ### 1. Defining Model
 ```{r}
-model_OLS <- linear_reg() |>
-  set_mode("regression") |>
+model_OLS <- linear_reg() %>%
+  set_mode("regression") %>%
   set_engine("lm")
 ```
 
@@ -468,12 +468,12 @@ For the Simple Model, Im taking "area_m2", "Bathrooms", "latitude", "longitude",
 **Log transformation model:**
 ```{r}
 delhi_ln_model <- recipe(Price_eur_log ~ .,
-                      data = train_delhi)|>
-  step_log(area_m2, offset =  1, base = 10)|>
-  step_log(Bathrooms, offset =  1, base = 10)|>
-  step_log(latitude, offset =  1, base = 10)|>
-  step_log(longitude, offset =  1, base = 10)|>
-  step_log(Bedrooms, offset =  1, base = 10)|>
+                      data = train_delhi)%>%
+  step_log(area_m2, offset =  1, base = 10)%>%
+  step_log(Bathrooms, offset =  1, base = 10)%>%
+  step_log(latitude, offset =  1, base = 10)%>%
+  step_log(longitude, offset =  1, base = 10)%>%
+  step_log(Bedrooms, offset =  1, base = 10)%>%
   step_rm("X", "price", "area", "Balcony", "parking", 
           "Lift", "Price_sqft", "Price_sqm",  "Price_eur", "area_m2_log", 
           "Price_sqm_log", "Bedrooms_log", "Bathrooms_log", "Balcony_log", 
@@ -486,9 +486,9 @@ Also for this model, Im making "area_m2", "Bathrooms", "latitude", "longitude", 
 
 **Principal Component Analysis model:**
 ```{r}
-delhi_pca_model <- recipe(Price_eur ~ ., data = train_delhi) |>
-  step_center(all_predictors())|>
-  step_scale(all_predictors())|>
+delhi_pca_model <- recipe(Price_eur ~ ., data = train_delhi) %>%
+  step_center(all_predictors())%>%
+  step_scale(all_predictors())%>%
   step_rm("X", "price", "area", "Price_sqft",  "Price_sqm", "Price_eur_log", "area_m2_log", "Price_sqm_log", "Bedrooms_log", "Bathrooms_log", "Balcony_log", "parking_log", "Lift_log")
 summary(delhi_pca_model)
 
@@ -499,22 +499,22 @@ For this model, Im scaling and centering all the predictors and then removing th
 ### 3. Workflows
 ```{r}
 #Simple model with direct inputs:
-delhi_model_wf <- workflow()|>
-  add_recipe(delhi_model)|>
+delhi_model_wf <- workflow()%>%
+  add_recipe(delhi_model)%>%
   add_model(model_OLS)
 ```
 
 ```{r}
 #Log transformation model:
-delhi_ln_model_wf <- workflow()|>
-  add_recipe(delhi_ln_model)|>
+delhi_ln_model_wf <- workflow()%>%
+  add_recipe(delhi_ln_model)%>%
   add_model(model_OLS)
 ```
 
 ```{r}
 #Principal Component Analysis model:
-delhi_pca_model_wf <- workflow()|>
-  add_recipe(delhi_pca_model)|> 
+delhi_pca_model_wf <- workflow()%>%
+  add_recipe(delhi_pca_model)%>% 
   add_model(model_OLS) 
 ```
 
